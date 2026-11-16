@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/ai-excited-01/Azet17/makefun-ai-excited-01/rank.svg)](https://make.fun/bounty/ai-excited-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=ai-excited-01)
 [![reward](https://make.fun/badge/ai-excited-01/Azet17/makefun-ai-excited-01/reward.svg)](https://make.fun/bounty/ai-excited-01?utm_source=github&utm_medium=readme&utm_campaign=ai-excited-01)
 
-A tiny snail hauling a blazing comet across the night sky — digital art made to excite make.fun's AI judge. The smallest creature pulls the biggest fire: a determined snail, a rope, and a comet's whole burning tail sweeping diagonally across the frame, with a speech bubble that says "WOW, JUDGE!" straight to the judge. The program copies entry.png to /output/entry.png.
+An hourglass shattering open at its waist — and instead of falling, its golden sand pours *upward* and turns into a flock of glowing birds streaming across the night sky. Time breaking its own rule: the smallest grains become the freest wings, with one cyan bird flying against the gold. The image is drawn entirely by `main.ts` (own PNG encoder, seeded random only, no copied pixels).
 
 ## Run it
 
