@@ -1,26 +1,20 @@
-// ai-excited-01 R5 — "The Last Wave"
-// A tiny red-sailed boat rides the face of a colossal wave that curls over
-// like a breaking sky; the crest bursts into spray and a flock of birds.
-// Drawn entirely in code (Node 22+ stdlib only): a 1024x1024 RGB raster,
-// hand-rolled PNG encoder. No image assets, no dependencies.
-// Concept: scale twist (thumb-sized boat vs. mountain wave) + momentum
-// (one diagonal surge, crest about to break) + a clean focal point that
-// still reads at 300px wide.
+// ai-excited-01 R6 — "Koi Over the Neon Tide"
+// A giant koi bursts out of a curling night wave above a neon city,
+// its leap scattering droplets that turn into stars mid-air.
+// Drawn entirely in code: own PNG encoder, seeded random only.
+// Writes entry.png to $MAKEFUN_OUTPUT_DIR (and to /output/entry.png).
 
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { deflateSync } from 'node:zlib';
-import { createHash } from 'node:crypto';
+import { mkdirSync, copyFileSync, writeFileSync } from "node:fs";
+import { deflateSync } from "node:zlib";
+import { join } from "node:path";
 
 const W = 1024;
 const H = 1024;
-const img = Buffer.alloc(W * H * 3);
 
-// ---- deterministic RNG ----
-function mulberry32(seed) {
+// ---------- seeded random ----------
+function mulberry32(seed: number) {
   let a = seed >>> 0;
-  return function () {
+  return () => {
     a |= 0; a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
@@ -29,336 +23,325 @@ function mulberry32(seed) {
 }
 const rand = mulberry32(20261117);
 
-// ---- pixel helpers ----
-function clamp255(v) { return v < 0 ? 0 : v > 255 ? 255 : v | 0; }
-function setPx(x, y, r, g, b) {
-  x |= 0; y |= 0;
-  if (x < 0 || x >= W || y < 0 || y >= H) return;
-  const i = (y * W + x) * 3;
-  img[i] = clamp255(r); img[i + 1] = clamp255(g); img[i + 2] = clamp255(b);
+// ---------- pixel buffer ----------
+const buf = new Uint8Array(W * H * 4);
+function px(x: number, y: number, r: number, g: number, b: number, a = 1) {
+  const ix = Math.round(x), iy = Math.round(y);
+  if (ix < 0 || iy < 0 || ix >= W || iy >= H) return;
+  const o = (iy * W + ix) * 4;
+  const inv = 1 - a;
+  buf[o] = Math.round(r * a + buf[o] * inv);
+  buf[o + 1] = Math.round(g * a + buf[o + 1] * inv);
+  buf[o + 2] = Math.round(b * a + buf[o + 2] * inv);
+  buf[o + 3] = 255;
 }
-function blendPx(x, y, r, g, b, a) {
-  x |= 0; y |= 0;
-  if (x < 0 || x >= W || y < 0 || y >= H || a <= 0) return;
-  if (a >= 1) { setPx(x, y, r, g, b); return; }
-  const i = (y * W + x) * 3;
-  img[i] = clamp255(img[i] + (r - img[i]) * a);
-  img[i + 1] = clamp255(img[i + 1] + (g - img[i + 1]) * a);
-  img[i + 2] = clamp255(img[i + 2] + (b - img[i + 2]) * a);
-}
-function mix(c1, c2, t) {
-  return [
-    clamp255(c1[0] + (c2[0] - c1[0]) * t),
-    clamp255(c1[1] + (c2[1] - c1[1]) * t),
-    clamp255(c1[2] + (c2[2] - c1[2]) * t),
-  ];
-}
-// gradient stops: [[pos0to1, [r,g,b]], ...]
-function gradAt(stops, t) {
-  if (t <= stops[0][0]) return stops[0][1];
-  for (let s = 1; s < stops.length; s++) {
-    if (t <= stops[s][0]) {
-      const [p0, c0] = stops[s - 1];
-      const [p1, c1] = stops[s];
-      return mix(c0, c1, (t - p0) / (p1 - p0));
-    }
-  }
-  return stops[stops.length - 1][1];
-}
-function fillRow(y, c) {
-  if (y < 0 || y >= H) return;
-  for (let x = 0; x < W; x++) {
-    const i = (y * W + x) * 3;
-    img[i] = c[0]; img[i + 1] = c[1]; img[i + 2] = c[2];
+function fillCircle(cx: number, cy: number, rad: number, r: number, g: number, b: number, a = 1) {
+  const x0 = Math.max(0, Math.floor(cx - rad)), x1 = Math.min(W - 1, Math.ceil(cx + rad));
+  const y0 = Math.max(0, Math.floor(cy - rad)), y1 = Math.min(H - 1, Math.ceil(cy + rad));
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const dx = x - cx, dy = y - cy;
+    if (dx * dx + dy * dy <= rad * rad) px(x, y, r, g, b, a);
   }
 }
-function fillCircle(cx, cy, r, c, alpha = 1) {
-  const r2 = r * r;
-  const x0 = Math.max(0, Math.floor(cx - r));
-  const x1 = Math.min(W - 1, Math.ceil(cx + r));
-  const y0 = Math.max(0, Math.floor(cy - r));
-  const y1 = Math.min(H - 1, Math.ceil(cy + r));
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
-      const dx = x - cx, dy = y - cy;
-      if (dx * dx + dy * dy <= r2) blendPx(x, y, c[0], c[1], c[2], alpha);
-    }
+function fillEllipse(cx: number, cy: number, rx: number, ry: number, r: number, g: number, b: number, a = 1, rot = 0) {
+  const cos = Math.cos(rot), sin = Math.sin(rot);
+  const x0 = Math.max(0, Math.floor(cx - rx - ry)), x1 = Math.min(W - 1, Math.ceil(cx + rx + ry));
+  const y0 = Math.max(0, Math.floor(cy - rx - ry)), y1 = Math.min(H - 1, Math.ceil(cy + rx + ry));
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const dx = x - cx, dy = y - cy;
+    const u = dx * cos + dy * sin, v = -dx * sin + dy * cos;
+    if ((u * u) / (rx * rx) + (v * v) / (ry * ry) <= 1) px(x, y, r, g, b, a);
   }
 }
-// scanline polygon fill; colorAt(y) -> [r,g,b]
-function fillPoly(pts, colorAt) {
+function fillPolygon(pts: [number, number][], r: number, g: number, b: number, a = 1) {
   let minY = H, maxY = 0;
-  for (const p of pts) { minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
+  for (const [, y] of pts) { minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
   minY = Math.max(0, Math.floor(minY)); maxY = Math.min(H - 1, Math.ceil(maxY));
-  const n = pts.length;
   for (let y = minY; y <= maxY; y++) {
-    const xs = [];
-    for (let i = 0; i < n; i++) {
-      const [x0, y0] = pts[i];
-      const [x1, y1] = pts[(i + 1) % n];
-      if ((y >= y0 && y < y1) || (y >= y1 && y < y0)) {
-        xs.push(x0 + ((y - y0) * (x1 - x0)) / (y1 - y0));
+    const xs: number[] = [];
+    for (let i = 0; i < pts.length; i++) {
+      const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+      if ((y1 <= y && y2 > y) || (y2 <= y && y1 > y)) {
+        xs.push(x1 + ((y - y1) / (y2 - y1)) * (x2 - x1));
       }
     }
-    xs.sort((a, b) => a - b);
-    const c = colorAt(y);
-    for (let k = 0; k + 1 < xs.length; k += 2) {
-      const xa = Math.max(0, Math.ceil(xs[k]));
-      const xb = Math.min(W - 1, Math.floor(xs[k + 1]));
-      for (let x = xa; x <= xb; x++) setPx(x, y, c[0], c[1], c[2]);
+    xs.sort((p, q) => p - q);
+    for (let i = 0; i + 1 < xs.length; i += 2) {
+      const xa = Math.max(0, Math.ceil(xs[i])), xb = Math.min(W - 1, Math.floor(xs[i + 1]));
+      for (let x = xa; x <= xb; x++) px(x, y, r, g, b, a);
     }
   }
 }
-// thick line via stamped circles
-function thickLine(x0, y0, x1, y1, w, c, alpha = 1) {
-  const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0)));
-  for (let s = 0; s <= steps; s++) {
-    const t = s / steps;
-    fillCircle(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, w / 2, c, alpha);
+function thickLine(x1: number, y1: number, x2: number, y2: number, w: number, r: number, g: number, b: number, a = 1) {
+  const d = Math.hypot(x2 - x1, y2 - y1);
+  const steps = Math.max(1, Math.ceil(d / (w * 0.4)));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    fillCircle(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, w / 2, r, g, b, a);
   }
 }
-// polyline through points
-function polyline(pts, w, c, alpha = 1) {
-  for (let i = 0; i + 1 < pts.length; i++) {
-    thickLine(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], w, c, alpha);
+function rotPt(cx: number, cy: number, x: number, y: number, ang: number): [number, number] {
+  const c = Math.cos(ang), s = Math.sin(ang);
+  return [cx + x * c - y * s, cy + x * s + y * c];
+}
+
+// ---------- sky: dusk gradient ----------
+for (let y = 0; y < H; y++) {
+  const t = y / H;
+  let r: number, g: number, b: number;
+  if (t < 0.45) { const k = t / 0.45; r = 12 + 46 * k; g = 10 + 22 * k; b = 48 + 42 * k; }
+  else if (t < 0.62) { const k = (t - 0.45) / 0.17; r = 58 + 150 * k; g = 32 + 62 * k; b = 90 + 18 * k; }
+  else { const k = (t - 0.62) / 0.38; r = 208 - 120 * k; g = 94 - 30 * k; b = 108 - 60 * k; }
+  for (let x = 0; x < W; x++) px(x, y, r, g, b);
+}
+
+// ---------- stars ----------
+for (let i = 0; i < 260; i++) {
+  const x = rand() * W, y = rand() * 560;
+  const s = rand();
+  const bright = 150 + rand() * 105;
+  fillCircle(x, y, s < 0.85 ? 1.2 : 2.2, bright, bright, 255, 0.5 + rand() * 0.5);
+  if (s > 0.93) {
+    thickLine(x - 6, y, x + 6, y, 1, 255, 255, 255, 0.7);
+    thickLine(x, y - 6, x, y + 6, 1, 255, 255, 255, 0.7);
   }
 }
 
-// ---- PNG encoder (color type 2, RGB, filter 0) ----
-const CRC_TABLE = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    t[n] = c >>> 0;
+// ---------- low moon with halo ----------
+for (let rr = 150; rr > 0; rr -= 6) {
+  const a = 0.05 + 0.10 * (1 - rr / 150);
+  fillCircle(792, 168, rr, 255, 214, 140, a * 0.55);
+}
+fillCircle(792, 168, 62, 255, 236, 180);
+fillCircle(778, 152, 10, 238, 205, 140, 0.8);
+fillCircle(806, 182, 7, 238, 205, 140, 0.8);
+fillCircle(800, 146, 5, 238, 205, 140, 0.8);
+
+// ---------- drifting clouds ----------
+for (let i = 0; i < 7; i++) {
+  const cx = rand() * W, cy = 90 + rand() * 260;
+  const cr = 40 + rand() * 70;
+  fillEllipse(cx, cy, cr, cr * 0.32, 255, 150, 170, 0.10);
+  fillEllipse(cx + cr * 0.5, cy + 8, cr * 0.7, cr * 0.26, 255, 150, 170, 0.08);
+}
+
+// ---------- neon city skyline ----------
+const horizon = 660;
+for (let x = 0; x < W;) {
+  const bw = 34 + rand() * 66;
+  const bh = 60 + rand() * 190;
+  const bx = x;
+  for (let y = horizon - bh; y < horizon; y++) for (let xx = bx; xx < bx + bw && xx < W; xx++) {
+    px(xx, y, 16, 14, 38);
   }
-  return t;
-})();
-function crc32(buf) {
+  if (rand() < 0.4) thickLine(bx + bw / 2, horizon - bh, bx + bw / 2, horizon - bh - 26, 2, 16, 14, 38);
+  for (let wy = horizon - bh + 12; wy < horizon - 10; wy += 16) {
+    for (let wx = bx + 7; wx < bx + bw - 7; wx += 14) {
+      if (rand() < 0.34) {
+        const warm = rand();
+        const wr = warm < 0.5 ? 255 : warm < 0.75 ? 80 : 255;
+        const wg = warm < 0.5 ? 190 : warm < 0.75 ? 220 : 90;
+        const wb = warm < 0.5 ? 90 : warm < 0.75 ? 255 : 190;
+        for (let dy = 0; dy < 7; dy++) for (let dx = 0; dx < 6; dx++) px(wx + dx, wy + dy, wr, wg, wb, 0.95);
+      }
+    }
+  }
+  x += bw + 2 + rand() * 10;
+}
+// city glow band on the horizon
+for (let y = horizon - 4; y < horizon + 26; y++) {
+  const a = 0.35 * (1 - Math.abs(y - horizon - 6) / 30);
+  for (let x = 0; x < W; x++) px(x, y, 255, 120, 90, Math.max(0, a));
+}
+
+// ---------- sea ----------
+for (let y = horizon; y < H; y++) {
+  const t = (y - horizon) / (H - horizon);
+  const r = 26 - 14 * t, g = 44 + 30 * t, b = 74 + 26 * t;
+  for (let x = 0; x < W; x++) px(x, y, r, g, b);
+}
+// moonlight path on the water
+for (let i = 0; i < 90; i++) {
+  const x = 792 + (rand() - 0.5) * (60 + (rand() * 220));
+  const y = horizon + 20 + rand() * 300;
+  fillEllipse(x, y, 14 + rand() * 26, 2.5 + rand() * 2, 255, 200, 120, 0.10 + rand() * 0.12);
+}
+// sea swell bands
+for (let i = 0; i < 26; i++) {
+  const y = horizon + 30 + rand() * 320;
+  const x = rand() * W;
+  const len = 60 + rand() * 160;
+  thickLine(x, y, x + len, y + (rand() - 0.5) * 6, 2, 120, 190, 210, 0.16);
+}
+
+// ---------- giant curling wave (right) ----------
+const wavePts: [number, number][] = [];
+for (let a = 0; a <= Math.PI * 1.15; a += 0.05) {
+  wavePts.push([760 + Math.cos(a) * 250, 700 - Math.sin(a) * 260]);
+}
+for (let a = Math.PI * 1.15; a >= 0; a -= 0.05) {
+  wavePts.push([760 + Math.cos(a) * 150, 700 - Math.sin(a) * 170]);
+}
+fillPolygon(wavePts, 18, 90, 130, 0.92);
+// wave crest highlight
+for (let a = 0.1; a <= Math.PI * 1.05; a += 0.04) {
+  const x = 760 + Math.cos(a) * 245, y = 700 - Math.sin(a) * 255;
+  fillCircle(x, y, 7 + rand() * 5, 190, 240, 255, 0.5);
+}
+// foam at the wave foot
+for (let i = 0; i < 130; i++) {
+  const x = 560 + rand() * 420, y = 690 + rand() * 60;
+  fillCircle(x, y, 2 + rand() * 7, 220, 245, 255, 0.25 + rand() * 0.55);
+}
+// curling lip droplets
+for (let i = 0; i < 60; i++) {
+  const a = 0.15 + rand() * 1.5;
+  const x = 760 + Math.cos(a) * (250 + rand() * 26), y = 700 - Math.sin(a) * (260 + rand() * 26);
+  fillCircle(x, y, 1.5 + rand() * 3.5, 200, 240, 255, 0.8);
+}
+
+// ---------- the koi: leaping diagonally, head up-left ----------
+const KCX = 470, KCY = 430, KANG = -0.62;
+function koi(x: number, y: number): [number, number] {
+  return rotPt(KCX, KCY, x, y, KANG);
+}
+function koiEllipse(dx: number, dy: number, rx: number, ry: number, r: number, g: number, b: number, a = 1) {
+  const [cx, cy] = koi(dx, dy);
+  fillEllipse(cx, cy, rx, ry, r, g, b, a, KANG);
+}
+function koiPoly(local: [number, number][], r: number, g: number, b: number, a = 1) {
+  fillPolygon(local.map(([x, y]) => koi(x, y)), r, g, b, a);
+}
+// flowing tail (two ribbons)
+koiPoly([[-150, -6], [-260, -70], [-300, -30], [-235, 10]], 255, 120, 40, 0.95);
+koiPoly([[-150, 8], [-250, 66], [-296, 34], [-228, -4]], 255, 90, 30, 0.95);
+koiPoly([[-150, -4], [-240, -44], [-272, -14], [-220, 6]], 255, 200, 120, 0.9);
+koiPoly([[-150, 6], [-232, 40], [-266, 16], [-214, -2]], 255, 200, 120, 0.9);
+// dorsal fin
+koiPoly([[-30, -52], [30, -88], [70, -50], [10, -44]], 255, 110, 40, 0.95);
+// pectoral fins
+koiPoly([[40, 30], [90, 78], [118, 60], [66, 22]], 255, 140, 60, 0.9);
+koiPoly([[-20, 34], [20, 84], [52, 66], [8, 26]], 255, 160, 80, 0.85);
+// body: white belly then orange back
+koiEllipse(0, 0, 185, 62, 255, 250, 240);
+koiEllipse(-6, -14, 178, 52, 255, 122, 26);
+// koi patches (deep red-orange)
+koiEllipse(-120, -22, 52, 26, 214, 48, 18, 0.95);
+koiEllipse(-30, -30, 44, 24, 214, 48, 18, 0.95);
+koiEllipse(62, -18, 58, 26, 214, 48, 18, 0.95);
+koiEllipse(120, -8, 34, 18, 214, 48, 18, 0.95);
+koiEllipse(-70, 18, 40, 16, 255, 176, 90, 0.9);
+// head
+koiEllipse(168, -4, 46, 40, 255, 250, 240);
+koiEllipse(176, -16, 34, 22, 255, 122, 26);
+// eye
+{
+  const [ex, ey] = koi(182, -18);
+  fillCircle(ex, ey, 9, 20, 12, 20);
+  fillCircle(ex + 3, ey - 3, 3.5, 255, 255, 255);
+}
+// barbels (whiskers)
+{
+  const [bx, by] = koi(204, 8);
+  const [tx, ty] = koi(258, 44);
+  thickLine(bx, by, tx, ty, 2.5, 255, 200, 140, 0.9);
+  const [tx2, ty2] = koi(252, 2);
+  thickLine(bx, by + 4, tx2, ty2, 2.5, 255, 200, 140, 0.9);
+}
+// scale shimmer along the back
+for (let i = 0; i < 46; i++) {
+  const dx = -150 + rand() * 280, dy = -46 + rand() * 30;
+  const [sx, sy] = koi(dx, dy);
+  fillCircle(sx, sy, 1.6 + rand() * 2, 255, 220, 160, 0.5);
+}
+
+// ---------- droplets turning into stars along the leap arc ----------
+for (let i = 0; i < 90; i++) {
+  const t = i / 90;
+  const x = 180 + t * 560 + (rand() - 0.5) * 46;
+  const y = 640 - Math.sin(t * Math.PI) * 330 - t * 60 + (rand() - 0.5) * 30;
+  if (rand() < 0.42) {
+    const s = 3 + rand() * 5;
+    fillCircle(x, y, s, 255, 215, 120, 0.95);
+    thickLine(x - s * 2.2, y, x + s * 2.2, y, 1.5, 255, 240, 180, 0.8);
+    thickLine(x, y - s * 2.2, x, y + s * 2.2, 1.5, 255, 240, 180, 0.8);
+  } else {
+    fillCircle(x, y, 2 + rand() * 4, 170, 225, 255, 0.75);
+  }
+}
+// splash burst where the koi left the water
+for (let i = 0; i < 70; i++) {
+  const a = -Math.PI * (0.15 + rand() * 0.7);
+  const d = 30 + rand() * 150;
+  const x = 250 + Math.cos(a) * d, y = 700 + Math.sin(a) * d * 0.55;
+  fillCircle(x, y, 2 + rand() * 6, 215, 240, 255, 0.3 + rand() * 0.6);
+}
+
+// ---------- motion streaks ----------
+for (let i = 0; i < 24; i++) {
+  const x = 120 + rand() * 760, y = 240 + rand() * 420;
+  const len = 40 + rand() * 110;
+  thickLine(x, y, x + len, y - len * 0.45, 2 + rand() * 2, 255, 190, 120, 0.10 + rand() * 0.14);
+}
+
+// ---------- vignette ----------
+for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+  const dx = (x - W / 2) / (W / 2), dy = (y - H / 2) / (H / 2);
+  const d = Math.sqrt(dx * dx + dy * dy);
+  if (d > 0.95) px(x, y, 0, 0, 10, Math.min(0.35, (d - 0.95) * 1.6));
+}
+
+// ---------- PNG encode (own encoder, filter 0) ----------
+const crcTable = new Uint32Array(256);
+for (let n = 0; n < 256; n++) {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  crcTable[n] = c >>> 0;
+}
+function crc32(data: Uint8Array): number {
   let c = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  for (let i = 0; i < data.length; i++) c = crcTable[(c ^ data[i]) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
 }
-function chunk(type, data) {
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length, 0);
-  const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(td), 0);
-  return Buffer.concat([len, td, crc]);
+function chunk(type: string, data: Uint8Array): Uint8Array {
+  const out = new Uint8Array(12 + data.length);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, data.length);
+  for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+  out.set(data, 8);
+  const crcData = new Uint8Array(4 + data.length);
+  crcData.set(out.subarray(4, 8 + data.length));
+  dv.setUint32(8 + data.length, crc32(crcData));
+  return out;
 }
-function encodePNG() {
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4);
-  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
-  const raw = Buffer.alloc(H * (1 + W * 3));
-  for (let y = 0; y < H; y++) {
-    raw[y * (1 + W * 3)] = 0;
-    img.copy(raw, y * (1 + W * 3) + 1, y * W * 3, (y + 1) * W * 3);
-  }
-  const idat = deflateSync(raw, { level: 9 });
-  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  return Buffer.concat([sig, chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', Buffer.alloc(0))]);
-}
-// ================= SCENE v2 =================
-const HORIZON = 560;
-
-// ---- sky: deep indigo -> violet -> burning orange at the horizon ----
-const SKY = [[0, [8, 6, 38]], [0.45, [52, 18, 88]], [0.75, [150, 42, 104]], [1, [255, 122, 58]]];
-for (let y = 0; y < HORIZON; y++) fillRow(y, gradAt(SKY, y / HORIZON));
-
-// ---- stars in the upper sky ----
-for (let i = 0; i < 130; i++) {
-  const x = rand() * W;
-  const y = rand() * 380;
-  const r = rand() < 0.85 ? 1 : 2;
-  const a = 0.35 + rand() * 0.6;
-  fillCircle(x, y, r, [255, 255, 255], a);
-  if (rand() < 0.12) {
-    thickLine(x - 4, y, x + 4, y, 1, [255, 255, 255], a * 0.7);
-    thickLine(x, y - 4, x, y + 4, 1, [255, 255, 255], a * 0.7);
-  }
-}
-
-// ---- sun: low, huge, right of the wave (x 830, y 445) ----
-for (let r = 210; r > 95; r -= 6) {
-  fillCircle(830, 445, r, [255, 150, 70], 0.05);
-}
-fillCircle(830, 445, 88, [255, 214, 130]);
-fillCircle(830, 445, 66, [255, 236, 180]);
-fillCircle(830, 445, 44, [255, 250, 225]);
-
-// ---- sea: dark teal gradient ----
-const SEA = [[0, [10, 66, 84]], [0.5, [6, 42, 62]], [1, [3, 18, 38]]];
-for (let y = HORIZON; y < H; y++) fillRow(y, gradAt(SEA, (y - HORIZON) / (H - HORIZON)));
-
-// distant swell on the horizon, for depth
-for (let y = 548; y < HORIZON; y++) {
-  for (let x = 0; x < W; x++) {
-    const wave = Math.sin(x * 0.02) * 3 + Math.sin(x * 0.043 + 1.7) * 2;
-    if (y > 552 + wave) blendPx(x, y, 8, 52, 66, 0.55);
-  }
-}
-
-// ---- sun reflection: short shimmering dashes under the sun ----
-for (let y = HORIZON + 10; y < H; y += 9) {
-  const t = (y - HORIZON) / (H - HORIZON);
-  const halfW = 20 + t * 80;
-  const cx = 830 + (rand() - 0.5) * (20 + t * 40);
-  const len = 8 + rand() * 26;
-  const a = 0.24 * (1 - t * 0.55);
-  thickLine(cx - len / 2, y, cx + len / 2, y, 3, [255, 166, 88], a);
-}
-
-// ---- bezier helpers ----
-function cubic(p0, p1, p2, p3, n) {
-  const pts = [];
-  for (let i = 0; i <= n; i++) {
-    const t = i / n, u = 1 - t;
-    pts.push([
-      u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0],
-      u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1],
-    ]);
-  }
-  return pts;
-}
-function quad(p0, p1, p2, n) {
-  const pts = [];
-  for (let i = 0; i <= n; i++) {
-    const t = i / n, u = 1 - t;
-    pts.push([u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0],
-              u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1]]);
-  }
-  return pts;
-}
-
-// ---- the wave: one colossal curl, smooth bezier silhouette ----
-// face: bottom-left rising convex to the crest
-const FACE = cubic([0, 1024], [40, 720], [240, 500], [600, 255], 48);
-// lip: crest sweeping right and curling down
-const LIP_TOP = quad([600, 255], [730, 232], [758, 330], 20);
-const LIP_UNDER = quad([758, 330], [722, 420], [625, 445], 16);
-// inner face: back down to the sea at bottom-right
-const INNER = quad([625, 445], [600, 700], [720, 1024], 24);
-const WAVE_PTS = [...FACE, ...LIP_TOP, ...LIP_UNDER, ...INNER];
-const WAVE_GRAD = [[0, [118, 224, 208]], [0.28, [34, 158, 168]], [0.6, [12, 96, 116]], [1, [4, 34, 56]]];
-fillPoly(WAVE_PTS, (y) => gradAt(WAVE_GRAD, (y - 235) / (1024 - 235)));
-
-// barrel opening: sky showing through the curl (ellipse at 668,372)
-const BARREL = [];
-for (let i = 0; i <= 28; i++) {
-  const a = (i / 28) * Math.PI * 2;
-  BARREL.push([668 + Math.cos(a) * 54, 372 + Math.sin(a) * 40]);
-}
-fillPoly(BARREL, (y) => gradAt(SKY, y / HORIZON));
-// foam rim on the top half of the barrel opening
-const RIM = [];
-for (let i = 0; i <= 14; i++) {
-  const a = Math.PI + (i / 14) * Math.PI; // upper half
-  RIM.push([668 + Math.cos(a) * 54, 372 + Math.sin(a) * 40]);
-}
-polyline(RIM, 5, [255, 255, 255], 0.9);
-
-// wave face: glossy streaks following the curl
-const streak = (dx, w, a) => {
-  const pts = FACE.filter((_, i) => i % 2 === 0 && i > 6 && i < 44)
-    .map(([x, y]) => [x + dx, y]);
-  polyline(pts, w, [200, 242, 238], a);
-};
-streak(46, 7, 0.13);
-streak(96, 5, 0.10);
-
-// gentle dark shading low on the wave so the crest pops
-for (let y = 920; y < H; y++) {
-  for (let x = 0; x < 620; x++) {
-    const t = (y - 920) / (H - 920);
-    blendPx(x, y, 2, 20, 38, t * 0.16);
-  }
-}
-
-// ---- foam lip along the crest ----
-polyline(LIP_TOP, 7, [255, 255, 255], 0.95);
-polyline(LIP_TOP.map(([x, y]) => [x - 8, y + 12]), 3, [255, 255, 255], 0.75);
-// foam drips falling from the lip underside
-for (let i = 0; i < 26; i++) {
-  const t = rand();
-  const x = 630 + t * 90 + (rand() - 0.5) * 10;
-  const y = 440 + t * 55 + rand() * 24;
-  fillCircle(x, y, 1 + rand() * 2.5, [240, 250, 250], 0.55 + rand() * 0.4);
-}
-
-// ---- spray bursting off the crest tip, up and right ----
-for (let i = 0; i < 130; i++) {
-  const a = -0.9 + rand() * 1.5;
-  const d = 12 + Math.pow(rand(), 1.6) * 210;
-  const x = 610 + Math.cos(a) * d + rand() * 8;
-  const y = 250 + Math.sin(a) * d * 0.9 + d * d * 0.0011;
-  const r = 0.8 + rand() * 2.6;
-  blendPx(x, y, 255, 255, 255, 0.35 + rand() * 0.6);
-  if (r > 2) fillCircle(x, y, r * 0.6, [255, 255, 255], 0.5);
-}
-
-// ---- birds bursting out of the spray, flying up-right ----
-function bird(x, y, s) {
-  const c = [18, 16, 42];
-  thickLine(x, y, x - s, y - s * 0.85, 3, c, 0.92);
-  thickLine(x, y, x + s, y - s * 0.7, 3, c, 0.92);
-}
-const FLOCK = [
-  [700, 190, 16], [748, 168, 19], [800, 150, 15], [852, 138, 20],
-  [905, 128, 14], [742, 210, 12], [812, 196, 13], [872, 178, 11],
-  [668, 224, 11], [790, 226, 10], [940, 168, 12], [700, 250, 9],
-  [845, 235, 9], [918, 205, 10], [776, 262, 8],
-];
-for (const [x, y, s] of FLOCK) bird(x, y, s);
-
-// ---- the tiny red-sailed boat, riding the wave face ----
-function boat(cx, cy, s) {
-  // wake
-  thickLine(cx - 46 * s, cy + 26 * s, cx - 8 * s, cy + 18 * s, 3, [255, 255, 255], 0.75);
-  thickLine(cx - 34 * s, cy + 32 * s, cx - 4 * s, cy + 24 * s, 2, [255, 255, 255], 0.5);
-  // hull
-  fillPoly([
-    [cx - 26 * s, cy + 14 * s], [cx + 26 * s, cy + 14 * s],
-    [cx + 18 * s, cy + 28 * s], [cx - 18 * s, cy + 28 * s],
-  ], () => [24, 16, 30]);
-  // mast
-  thickLine(cx, cy + 14 * s, cx, cy - 44 * s, 3, [24, 16, 30], 1);
-  // red sail — the one hot accent on the whole wave
-  fillPoly([[cx + 2 * s, cy - 42 * s], [cx + 2 * s, cy + 12 * s], [cx + 40 * s, cy + 12 * s]], () => [232, 46, 28]);
-  // white jib
-  fillPoly([[cx - 2 * s, cy - 42 * s], [cx - 2 * s, cy + 12 * s], [cx - 30 * s, cy + 12 * s]], () => [250, 244, 230]);
-  // sailor dot
-  fillCircle(cx + 6 * s, cy + 8 * s, 3, [255, 220, 180], 1);
-}
-boat(400, 560, 1.5);
-
-// ---- foreground foam at the wave base ----
-for (let i = 0; i < 60; i++) {
-  const x = rand() * 640;
-  const y = 950 + rand() * 70;
-  fillCircle(x, y, 1 + rand() * 3, [235, 245, 245], 0.25 + rand() * 0.45);
-}
-polyline([[0, 982], [160, 972], [320, 984], [480, 970], [640, 982]], 3, [255, 255, 255], 0.22);
-
-// ---- vignette: pull the eye to the wave + boat ----
+const raw = new Uint8Array(H * (1 + W * 3));
 for (let y = 0; y < H; y++) {
+  raw[y * (1 + W * 3)] = 0;
   for (let x = 0; x < W; x++) {
-    const dx = (x - 520) / 620, dy = (y - 470) / 620;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    if (d > 0.72) {
-      const a = Math.min(0.22, (d - 0.72) * 0.55);
-      blendPx(x, y, 4, 4, 18, a);
-    }
+    const s = (y * W + x) * 4, d = y * (1 + W * 3) + 1 + x * 3;
+    raw[d] = buf[s]; raw[d + 1] = buf[s + 1]; raw[d + 2] = buf[s + 2];
   }
 }
+const ihdr = new Uint8Array(13);
+{
+  const dv = new DataView(ihdr.buffer);
+  dv.setUint32(0, W); dv.setUint32(4, H);
+  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+}
+const idat = deflateSync(raw, { level: 9 });
+const png = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.from(chunk("IHDR", ihdr)),
+  Buffer.from(chunk("IDAT", idat)),
+  Buffer.from(chunk("IEND", new Uint8Array(0))),
+]);
 
-// ================= OUTPUT =================
-const png = encodePNG();
-const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const outDir = process.env.MAKEFUN_OUTPUT_DIR || "/output";
 mkdirSync(outDir, { recursive: true });
-const here = dirname(fileURLToPath(import.meta.url));
-writeFileSync(join(outDir, 'entry.png'), png);
-writeFileSync(join(here, 'entry.png'), png);
-const sha = createHash('sha256').update(png).digest('hex');
-console.log(`entry.png ${png.length} bytes sha256=${sha} ${W}x${H}`);
+const target = join(outDir, "entry.png");
+writeFileSync(target, png);
+if (target !== "/output/entry.png") {
+  mkdirSync("/output", { recursive: true });
+  copyFileSync(target, "/output/entry.png");
+}
+console.log(`wrote ${target} ${png.length} bytes ${W}x${H}`);
