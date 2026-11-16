@@ -1,35 +1,18 @@
-// ai-excited-01 — "Make the AI judge excited"
-// Copies the pre-generated entry image into the make.fun output directory.
-// Deterministic: the output is a byte-for-byte copy of entry.png, every run.
+import { copyFileSync, mkdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
+// Copy the entry image into the output directory. The program runs
+// twice and both runs must write the same bytes, so this is a plain
+// byte-for-byte copy with a size check, nothing generated or random.
 const here = dirname(fileURLToPath(import.meta.url));
-const source = join(here, 'entry.png');
+const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+const source = join(here, "entry.png");
+const target = join(outDir, "entry.png");
 
-const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
-const destination = join(outputDir, 'entry.png');
+mkdirSync(outDir, { recursive: true });
+copyFileSync(source, target);
 
-if (!existsSync(source)) {
-  throw new Error(`entry image not found: ${source}`);
+if (statSync(source).size !== statSync(target).size) {
+  throw new Error("entry.png copy is incomplete");
 }
-
-mkdirSync(outputDir, { recursive: true });
-copyFileSync(source, destination);
-
-// Verify the copy is byte-for-byte identical to the source; fail loudly
-// rather than handing make.fun a truncated or corrupted image.
-const digest = (path: string) =>
-  createHash('sha256').update(readFileSync(path)).digest('hex');
-const sourceHash = digest(source);
-const outputHash = digest(destination);
-if (sourceHash !== outputHash) {
-  throw new Error(
-    `output hash mismatch: source ${sourceHash} != output ${outputHash}`,
-  );
-}
-
-console.log(`wrote ${destination} (sha256 ${outputHash})`);
